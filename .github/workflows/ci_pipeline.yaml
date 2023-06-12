@@ -1,0 +1,88 @@
+name: aichopen-tools build and publish
+
+on:
+  push:
+#    branches-ignore:
+#      - main # To avoid re-running the tests once the PR is closed and pushed to main
+  pull_request:
+    types:
+      - closed
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install requirements from setup.cfg and verify install worked
+        run: |
+          pip install .
+          python -c "from aichopen_tools.json_loader import JsonLoader;from aichopen_tools.logger import LoggerFactory"
+
+  create_release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: tests
+    if: github.event.pull_request.merged && github.event.pull_request.base.ref == 'main'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set version
+        run: |
+          VER=$(cat VERSION)
+          echo "VERSION=$VER" >> $GITHUB_ENV
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # This token is provided by Actions, you do not need to create your own token
+          RELEASE_VERSION: ${{ inputs.release_tag != '' && inputs.release_tag || env.VERSION }}
+        with:
+          tag_name: ${{ env.VERSION }}
+          release_name: Release ${{ env.VERSION }}
+          body: ${{ github.event.head_commit.message }}
+          draft: false
+          prerelease: false
+
+  publish_to_pypi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: tests
+    if: github.event.pull_request.merged && github.event.pull_request.base.ref == 'main'
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set version
+        run: |
+          VER=$(cat VERSION)
+          echo "VERSION=$VER" >> $GITHUB_ENV
+      - name: Generate the distribution archives
+        run: |
+          python3 -m pip install --upgrade build
+          python3 -m build
+      - name: Upload to TestPyPI
+        run: |
+          python3 -m pip install --upgrade twine
+          python3 -m twine upload --repository testpypi dist/* -u __token__ -p ${{ secrets.TEST_PYPI_API_TOKEN }}
+      - name: Pip install and test package from TestPyPI
+        run: |
+          python3 -m pip install --index-url https://test.pypi.org/simple/ aichopen-tools
+          python -c "from aichopen_tools.json_loader import JsonLoader;from aichopen_tools.logger import LoggerFactory"
+      - name: Upload to PyPI
+        run: |
+          python3 -m twine upload dist/* -u __token__ -p ${{ secrets.PYPI_API_TOKEN }}
+      - name: Convert commit message new lines to '\n'
+        run: |
+          COMMIT_MSG_FORMATTED=$(echo -n "${{ github.event.pull_request.body }}" | sed -z 's/\n/\\n/g' | sed -z 's/\r/\\n/g')
+          echo "COMMIT_MSG=$COMMIT_MSG_FORMATTED" >> $GITHUB_ENV
+      - name: Notify the ef_ai-team-only channel about the new release
+        id: slack
+        uses: slackapi/slack-github-action@007b2c3c751a190b6f0f040e47ed024deaa72844
+        with:
+          payload: |
+            {
+              "package_name": "${{ github.event.repository.name }}",
+              "package_version": "${{ env.VERSION }}",
+              "release_message": "From branch:\n${{ env.BRANCH }}\nCommit message:\n${{ env.COMMIT_MSG }}"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}

@@ -23,6 +23,12 @@ class LevelFilter(logging.Filter):
 
 class LoggerFactory:
     output_files = []
+    
+    DEBUG = logging.DEBUG
+    INFO = logging.INFO
+    WARN = logging.WARN
+    CRITICAL = logging.CRITICAL
+    
     min_stdout = logging.DEBUG
     max_stdout = logging.INFO
     min_stdoerr = logging.WARN
